@@ -72,8 +72,62 @@ export async function POST(req) {
               const finalFileSize = sizeMatch ? sizeMatch[1].trim() : "Unknown";
               
               let dlDokanLink = "Failed", gcloudLink = "Failed", driveCloudLink = "Failed", gofileLink = `https://d.instantdl.cfd/dokan/gofile.php?drive_id=${driveFileId}`;
+              let generatedAbyssId = null; // 🟢 Abyss ID এর ভ্যারিয়েবল
 
-              // 🟢 1. DL Dokan API Call
+              // 🟢 1. Official Abyss.to API Call (Login & Remote Upload)
+              try {
+                if (process.env.ABYSS_EMAIL && process.env.ABYSS_PASSWORD) {
+                  console.log(`[Queue Abyss] 1. Logging in to Abyss to get Token...`);
+                  
+                  // স্টেপ ১: লগইন করে টোকেন নেওয়া
+                  const authRes = await fetch('https://api.abyss.to/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      email: process.env.ABYSS_EMAIL,
+                      password: process.env.ABYSS_PASSWORD
+                    })
+                  });
+
+                  const authData = await authRes.json();
+
+                  if (authData && authData.token) {
+                    const abyssToken = authData.token;
+                    console.log(`[Queue Abyss] ✅ Token received! Requesting Remote Upload...`);
+
+                    // স্টেপ ২: টোকেন ব্যবহার করে রিমোট আপলোড করা
+                    const abyssRes = await fetch(`https://api.abyss.to/v1/remote/drive/${driveFileId}`, {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${abyssToken}`,
+                        'Content-Type': 'application/json'
+                      }
+                    });
+                    
+                    const rawResponse = await abyssRes.text();
+                    console.log(`[Queue Abyss] Status: ${abyssRes.status}`);
+                    
+                    if (abyssRes.ok && rawResponse.trim() !== "") {
+                        const abyssDataFinal = JSON.parse(rawResponse);
+                        
+                        if (abyssDataFinal && abyssDataFinal.id) {
+                          generatedAbyssId = abyssDataFinal.id;
+                          console.log(`[Queue Abyss] 🚀 Success! Abyss ID: ${generatedAbyssId}`);
+                        }
+                    } else {
+                        console.log(`[Queue Abyss Error] Upload Rejected:`, rawResponse);
+                    }
+                  } else {
+                    console.log(`[Queue Abyss Error] Login Failed. Check Email/Password.`, authData);
+                  }
+                } else {
+                  console.log("[Queue Abyss] Email or Password missing in .env");
+                }
+              } catch (err) {
+                console.error("[Queue Abyss Error]", err.message);
+              }
+
+              // 🟢 2. DL Dokan API Call
               try {
                 if (process.env.DL_DOKAN_API_KEY) {
                   const dlApiUrl = `https://dldokan.com/userapi/?api_key=${process.env.DL_DOKAN_API_KEY}&drive_id=${driveFileId}`;
@@ -84,7 +138,7 @@ export async function POST(req) {
                 }
               } catch (err) {}
 
-              // 🟢 2. Old DriveCloud API Call
+              // 🟢 3. Old DriveCloud API Call
               try {
                 if (process.env.DRIVE_CLOUD_API_KEY) {
                   const dcData = await (await fetch(`http://new.drivecloud.cc/api/v1/${process.env.DRIVE_CLOUD_API_KEY}/${driveFileId}`)).json();
@@ -92,7 +146,7 @@ export async function POST(req) {
                 }
               } catch (err) {}
 
-              // 🟢 3. New G Cloud API Call
+              // 🟢 4. New G Cloud API Call
               try {
                 if (process.env.GCLOUD_API_KEY) {
                   const gcApiUrl = `https://gcloud.sbs/api/v1/create/?drive_id=${driveFileId}&api_key=${process.env.GCLOUD_API_KEY}`;
@@ -111,7 +165,8 @@ export async function POST(req) {
                   status: "completed", 
                   movieName: finalMovieName, 
                   driveLink: finalDriveLink, 
-                  fileSize: finalFileSize, // 🚀 ফাইল সাইজ ডাটাবেসে সেভ হচ্ছে
+                  fileSize: finalFileSize, 
+                  abyssId: generatedAbyssId, // 🚀 Abyss ID ডাটাবেসে সেভ হচ্ছে
                   gofileLink, 
                   dlDokanLink, 
                   gcloudLink,
