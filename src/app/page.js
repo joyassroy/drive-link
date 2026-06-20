@@ -351,7 +351,7 @@ export default function DashboardPage() {
           <div style={{ display: "inline-flex", padding: "12px", background: "rgba(255,255,255,0.1)", borderRadius: "12px", marginBottom: "10px", color: "white" }}>
              <IconRocket />
           </div>
-          {/* 🚀 এখানে justify+Content কে ফিক্স করে justifyContent করা হয়েছে */}
+          {/* 🚀 এখানে justify+Content কে ফিক্স করে justifyContent করা হয়েছে */}
           <h2 style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", fontSize: "20px", margin: 0, fontWeight: "900", letterSpacing: "1px" }}>
             <IconGear /> ENGINE PANEL
           </h2>

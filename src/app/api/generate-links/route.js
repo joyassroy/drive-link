@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next"; // NextAuth থেকে লগইন করা ইউজার ধরতে
-import dbConnect from '@/lib/dbConnect'; // তোমার ডাটাবেস কানেকশন ফাইল
+import dbConnect from '@/lib/mongodb'; // তোমার ডাটাবেস কানেকশন ফাইল
 import GeneratedLink from '@/models/GeneratedLink';
 
 function extractDriveId(url) {

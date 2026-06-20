@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import User from "@/lib/User";
@@ -72,7 +73,7 @@ export async function POST(req) {
               const finalFileSize = sizeMatch ? sizeMatch[1].trim() : "Unknown";
               
               let dlDokanLink = "Failed", gcloudLink = "Failed", driveCloudLink = "Failed", gofileLink = `https://d.instantdl.cfd/dokan/gofile.php?drive_id=${driveFileId}`;
-              let generatedAbyssId = null; // 🟢 Abyss ID এর ভ্যারিয়েবল
+              let generatedAbyssId = null; // 🟢 Abyss ID এর ভ্যারিয়েবল
 
               // 🟢 1. Official Abyss.to API Call (Login & Remote Upload)
               try {
@@ -177,8 +178,8 @@ export async function POST(req) {
           } else {
               throw new Error("Python script failed to return link.");
           }
-      } catch (error) {
-          console.error(`[Queue Error] Job ${jobId} Failed!`);
+      }  catch (error) {
+          console.error(`[Queue Error] Job ${jobId} Failed! Reason:`, error.message || error);
           await GeneratedLink.findOneAndUpdate({ jobId }, { status: "failed", movieName: "Process Failed!" });
       }
     });
