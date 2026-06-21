@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import time
 import requests
 import subprocess
 import urllib.parse
@@ -11,6 +12,41 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
+
+# 🚀 রিয়েল-টাইম প্রোগ্রেস API তে পাঠানোর ফাংশন
+def send_progress(api_url, job_id, progress, stage):
+    if not api_url or not job_id: 
+        return
+    try:
+        # url এর শেষে ট্রেইলিং স্ল্যাশ থাকলে বাদ দিচ্ছি
+        base_url = api_url.rstrip('/')
+        requests.post(f"{base_url}/api/update-progress", json={
+            "jobId": job_id,
+            "progress": int(progress),
+            "currentStage": stage
+        }, timeout=3)
+    except Exception as e:
+        pass # নেটওয়ার্ক এরর হলে স্ক্রিপ্ট যেন ক্র্যাশ না করে
+
+# 🚀 FFmpeg এর আসল পার্সেন্টেজ ট্র্যাক করার ফাংশন
+def run_ffmpeg_tracked(cmd, duration, api_url, job_id, stage, start_pct, end_pct):
+    send_progress(api_url, job_id, start_pct, stage)
+    # subprocess.run এর বদলে Popen ব্যবহার করে লাইভ আউটপুট রিড করছি
+    process = subprocess.Popen(cmd, shell=True, stderr=subprocess.PIPE, universal_newlines=True)
+    last_report = time.time()
+    
+    for line in process.stderr:
+        if time.time() - last_report > 2: # প্রতি ২ সেকেন্ড পর পর আপডেট পাঠাবে
+            match = re.search(r"time=\s*(\d+):(\d+):(\d+\.\d+)", line)
+            if match and duration > 0:
+                h, m, s = map(float, match.groups())
+                curr_time = h*3600 + m*60 + s
+                pct = int(start_pct + ((curr_time / duration) * (end_pct - start_pct)))
+                send_progress(api_url, job_id, min(pct, end_pct), stage)
+                last_report = time.time()
+                
+    process.wait()
+    send_progress(api_url, job_id, end_pct, stage)
 
 class HeadlessDriveManager:
     def __init__(self, client_id, client_secret, refresh_token):
@@ -32,14 +68,19 @@ class HeadlessDriveManager:
             print(f"[Error] Headless Drive connection failed: {e}")
             return None
 
-    def download_drive_file(self, file_id, output_path):
+    def download_drive_file(self, file_id, output_path, api_url="", job_id=""):
         try:
             request = self.service.files().get_media(fileId=file_id)
             with io.FileIO(output_path, 'wb') as fh:
                 downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024)
                 done = False
+                last_report = time.time()
                 while done is False:
                     status, done = downloader.next_chunk()
+                    if status and time.time() - last_report > 2:
+                        pct = int(status.progress() * 15) # ড্রাইভ ডাউনলোড 0-15%
+                        send_progress(api_url, job_id, pct, "Downloading raw file to server...")
+                        last_report = time.time()
             print("[Success] Google Drive file downloaded completely.")
             return True
         except Exception as e:
@@ -124,7 +165,8 @@ def create_promo_subtitle(brand_name):
         f.write(srt_content)
     return srt_filename
 
-def process_and_upload_movie(video_url, folder_id, client_id, client_secret, refresh_token, custom_name):
+def process_and_upload_movie(video_url, folder_id, client_id, client_secret, refresh_token, custom_name, api_url, job_id):
+    send_progress(api_url, job_id, 2, "Initializing Engine...")
     client_brand_name = "MovieNewsBd.com"
     drive_manager = HeadlessDriveManager(client_id, client_secret, refresh_token)
     
@@ -141,9 +183,10 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
     process_id = uuid.uuid4().hex[:8]
     temp_filename = f"downloaded_raw_{process_id}{file_ext}"
 
-    # 1. Download Raw File
+    # 1. Download Raw File (0% to 15%)
+    send_progress(api_url, job_id, 5, "Downloading raw file to server...")
     if drive_file_id:
-        success = drive_manager.download_drive_file(drive_file_id, temp_filename)
+        success = drive_manager.download_drive_file(drive_file_id, temp_filename, api_url, job_id)
         if not success: return
     else:
         print("[Download] Starting standard download...")
@@ -168,25 +211,46 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
             
             r = requests.get(safe_video_url, stream=True, headers=headers)
             r.raise_for_status()
+            
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            last_report = time.time()
+            
             with open(temp_filename, "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk: f.write(chunk)
+                    if chunk: 
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0 and time.time() - last_report > 2:
+                            pct = int((downloaded / total_size) * 15)
+                            send_progress(api_url, job_id, pct, "Downloading raw file to server...")
+                            last_report = time.time()
+                            
             print("[Success] Download completed.")
         except Exception as e:
             print(f"[Error] Download failed: {e}")
             return
 
-    # 2. Get Original Resolution
+    send_progress(api_url, job_id, 15, "Analyzing file metadata...")
+
+    # 2. Get Original Resolution & Duration
     orig_height = 720 # Default fallback
+    video_duration = 1.0
     if os.path.exists(temp_filename):
         try:
-            cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "{temp_filename}"'
-            output = subprocess.check_output(cmd, shell=True, text=True).strip()
-            if output.isdigit():
-                orig_height = int(output)
+            # Get height
+            cmd_h = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "{temp_filename}"'
+            output_h = subprocess.check_output(cmd_h, shell=True, text=True).strip()
+            if output_h.isdigit():
+                orig_height = int(output_h)
+                
+            # Get duration
+            cmd_d = f'ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "{temp_filename}"'
+            output_d = subprocess.check_output(cmd_d, shell=True, text=True).strip()
+            video_duration = float(output_d)
         except Exception: pass
 
-    # 🚀 সলিড কোয়ালিটি টার্গেট লজিক
+    # 🚀 সলিড কোয়ালিটি টার্গেট লজিক
     targets = []
     if orig_height >= 2160: targets = [2160, 1080, 720, 480]
     elif orig_height >= 1080: targets = [1080, 720, 480]
@@ -198,11 +262,11 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
     
     master_filename = f"master_clean_{process_id}{file_ext}"
 
-    # STEP 3: Create Clean Master File
+    # STEP 3: Create Clean Master File (15% to 30%)
     print("[Process] Creating Clean Master File with Promo Subtitle...")
     try:
         cmd_master = f'ffmpeg -i "{temp_filename}" -i "{promo_srt}" -map_metadata -1 -map 0:v? -map 0:a? -map 1:s -c copy -c:s {sub_codec} -max_muxing_queue_size 1024 -metadata:s:s:0 title="{client_brand_name}" -metadata:s:s:0 language=ben "{master_filename}" -y'
-        subprocess.run(cmd_master, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_ffmpeg_tracked(cmd_master, video_duration, api_url, job_id, "Cleaning metadata & uploading Original...", 15, 30)
     except Exception as e:
         print(f"[Error] Master file creation failed: {e}")
         return
@@ -212,10 +276,14 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
     if os.path.exists(promo_srt): os.remove(promo_srt)
 
     generated_links_array = []
+    
+    # টোটাল কোয়ালিটি লুপের জন্য প্রোগ্রেস বার ভাগ করা (30% থেকে 85% পর্যন্ত)
+    total_targets = len(targets)
+    progress_per_target = 55 / total_targets if total_targets > 0 else 55
+    current_base_pct = 30
 
     # STEP 5: Loop to generate multiple qualities
     for height in targets:
-        # 🚀 নিখুঁত নামকরণের লজিক
         if height >= 2160: q_name = "4K"
         else: q_name = f"{height}p"
 
@@ -224,6 +292,8 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
         q_filename = f"{process_id}_{q_name}{file_ext}"
 
         print(f"[Process] Generating {q_name} quality...")
+        
+        target_end_pct = current_base_pct + progress_per_target
 
         try:
             if height >= orig_height - 50:
@@ -231,7 +301,10 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
             else:
                 cmd = f'ffmpeg -i "{master_filename}" -map 0:v:0 -map 0:a? -map 0:s? -vf "scale=-2:{height}:flags=fast_bilinear" -c:v libx264 -preset ultrafast -crf 28 -threads 1 -c:a copy -c:s copy -max_muxing_queue_size 1024 -map_metadata -1 -metadata title="{final_display_name}" -metadata:s:v title="{final_display_name}" -metadata:s:a title="{final_display_name}" "{q_filename}" -y'
 
-            subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 🚀 রিয়েল-টাইম ট্র্যাকিং সহ কনভার্ট
+            run_ffmpeg_tracked(cmd, video_duration, api_url, job_id, f"Transcoding {q_name}...", int(current_base_pct), int(target_end_pct))
+            
+            current_base_pct = target_end_pct # পরের লুপের জন্য বেস আপডেট
             
             size_str = "Unknown"
             if os.path.exists(q_filename):
@@ -239,6 +312,8 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
                 size_mb = size_bytes / (1024 * 1024)
                 size_str = f"{size_mb / 1024:.2f} GB" if size_mb >= 1024 else f"{size_mb:.2f} MB"
 
+            send_progress(api_url, job_id, int(current_base_pct), f"Uploading {q_name} to Google Drive...")
+            
             # Upload to Drive
             drive_id = drive_manager.upload_movie(q_filename, folder_id, f"{final_display_name}{file_ext}")
             
@@ -259,6 +334,7 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
     # STEP 6: Delete Master File
     if os.path.exists(master_filename): os.remove(master_filename)
 
+    send_progress(api_url, job_id, 90, "Generating multiple APIs for all qualities...")
     print("[Cleanup] System clean.")
     print(f"__FINAL_RESULT_ARRAY__={json.dumps(generated_links_array)}")
 
@@ -270,6 +346,9 @@ if __name__ == "__main__":
     parser.add_argument("--client_id", required=True)
     parser.add_argument("--client_secret", required=True)
     parser.add_argument("--custom_name", required=False, default="")
+    # 🚀 নতুন দুইটা আর্গুমেন্ট রিয়েল-টাইম ডাটার জন্য
+    parser.add_argument("--api_url", required=False, default="") 
+    parser.add_argument("--job_id", required=False, default="")
     
     args = parser.parse_args()
-    process_and_upload_movie(args.url, args.folder, args.client_id, args.client_secret, args.refresh_token, args.custom_name)
+    process_and_upload_movie(args.url, args.folder, args.client_id, args.client_secret, args.refresh_token, args.custom_name, args.api_url, args.job_id)

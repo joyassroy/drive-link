@@ -9,7 +9,7 @@ import fs from "fs";
 import crypto from "crypto";
 
 const execPromise = util.promisify(exec);
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); // 🚀 API ব্লক এড়ানোর জন্য Sleep ফাংশন
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); // 🚀 API ব্লক এড়ানোর জন্য Sleep ফাংশন
 
 const taskQueue = [];
 let isProcessing = false;
@@ -50,7 +50,9 @@ export async function POST(req) {
     const venvPythonPath = path.join(process.cwd(), "venv", "bin", "python3");
     if (fs.existsSync(venvPythonPath)) pythonExecutable = venvPythonPath;
 
-    const command = `"${pythonExecutable}" "${pythonScriptPath}" --url "${videoUrl}" --folder "${folderId}" --refresh_token "${user.refreshToken}" --client_id "${process.env.GOOGLE_CLIENT_ID}" --client_secret "${process.env.GOOGLE_CLIENT_SECRET}" --custom_name "${customName || ''}"`;
+    // 🚀 এখানে baseUrl এবং কমান্ড আপডেট করা হয়েছে যাতে পাইথন লাইভ আপডেট পাঠাতে পারে
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const command = `"${pythonExecutable}" "${pythonScriptPath}" --url "${videoUrl}" --folder "${folderId}" --refresh_token "${user.refreshToken}" --client_id "${process.env.GOOGLE_CLIENT_ID}" --client_secret "${process.env.GOOGLE_CLIENT_SECRET}" --custom_name "${customName || ''}" --api_url "${baseUrl}" --job_id "${jobId}"`;
 
     taskQueue.push(async () => {
       console.log(`[Queue] Starting job ${jobId} for: ${email}`);
@@ -67,7 +69,7 @@ export async function POST(req) {
               const finalQualitiesArray = [];
               let mainMovieName = processedQualities[0].movieName;
               
-              // 🚀 ১. শুধুমাত্র প্লেয়ার (Abyss) এর জন্য মাস্টার আইডি নেবো
+              // 🚀 ১. শুধুমাত্র প্লেয়ার (Abyss) এর জন্য মাস্টার আইডি নেবো
               const masterDriveId = processedQualities[0].driveId;
               let masterAbyssId = null;
 
@@ -103,7 +105,7 @@ export async function POST(req) {
 
                   console.log(`[API Queue] Fetching Download APIs for Quality: ${q.quality}`);
 
-                  // 🟢 DL Dokan API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  // 🟢 DL Dokan API (প্রতিটা কোয়ালিটির জন্য আলাদা)
                   try {
                       if (process.env.DL_DOKAN_API_KEY) {
                           const dlApiUrl = `https://dldokan.com/userapi/?api_key=${process.env.DL_DOKAN_API_KEY}&drive_id=${currentDriveId}`;
@@ -113,7 +115,7 @@ export async function POST(req) {
                       }
                   } catch (err) {}
 
-                  // 🟢 Drive Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  // 🟢 Drive Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
                   try {
                       if (process.env.DRIVE_CLOUD_API_KEY) {
                           const dcRes = await fetch(`http://new.drivecloud.cc/api/v1/${process.env.DRIVE_CLOUD_API_KEY}/${currentDriveId}`);
@@ -122,7 +124,7 @@ export async function POST(req) {
                       }
                   } catch (err) {}
 
-                  // 🟢 G Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  // 🟢 G Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
                   try {
                       if (process.env.GCLOUD_API_KEY) {
                           const gcApiUrl = `https://gcloud.sbs/api/v1/create/?drive_id=${currentDriveId}&api_key=${process.env.GCLOUD_API_KEY}`;
@@ -144,7 +146,7 @@ export async function POST(req) {
                       gcloudLink: gcloudLink            // 🟢 আলাদা কোয়ালিটির লিংক
                   });
 
-                  // ⚠️ API ব্লক এড়াতে প্রতি রিকোয়েস্টের পর ৩.৫ সেকেন্ডের ব্রেক
+                  // ⚠️ API ব্লক এড়াতে প্রতি রিকোয়েস্টের পর ৩.৫ সেকেন্ডের ব্রেক
                   if (i < processedQualities.length - 1) {
                       await sleep(3500); 
                   }

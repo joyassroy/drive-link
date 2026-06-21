@@ -20,6 +20,7 @@ export async function GET(req) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
 
+    // 🚀 ডাটাবেস থেকে এখন অটোমেটিক্যালি progress এবং currentStage ফ্রন্টএন্ডে চলে যাবে!
     return NextResponse.json(job, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });

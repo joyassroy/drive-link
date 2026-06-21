@@ -15,11 +15,15 @@ const generatedLinkSchema = new mongoose.Schema({
   fileSize: { type: String, default: "Unknown" },
   abyssId: { type: String, default: null },
 
-  // 🚀 New Field: কোয়ালিটি অনুযায়ী সব এপিআই লিংক সেভ করার জন্য
+  // 🚀 New Field: কোয়ালিটি অনুযায়ী সব এপিআই লিংক সেভ করার জন্য
   qualities: {
     type: Array,
     default: []
   },
+
+  // 🚀 New Fields: রিয়েল-টাইম প্রোগ্রেস ট্র্যাক করার জন্য
+  progress: { type: Number, default: 0 },
+  currentStage: { type: String, default: "Initializing Engine..." },
 
   createdAt: { type: Date, default: Date.now },
 });

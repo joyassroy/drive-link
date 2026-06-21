@@ -22,24 +22,14 @@ export default function DashboardPage() {
   const [message, setMessage] = useState("");
   const [generatedData, setGeneratedData] = useState(null); 
   
-  const [progressStage, setProgressStage] = useState(0);
+  // 🚀 রিয়েল-টাইম ডাটা রাখার স্টেট
+  const [progressStageText, setProgressStageText] = useState("Initializing Engine...");
   const [progressPercent, setProgressPercent] = useState(0);
   
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("add"); 
   const [historyData, setHistoryData] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  
-  const [historyProgress, setHistoryProgress] = useState({}); 
-
-  const stages = [
-    "Initializing Engine...", 
-    "Downloading raw file to server...", 
-    "Cleaning metadata & uploading Original...", 
-    "Transcoding to multiple qualities...", 
-    "Generating multiple APIs for all qualities...",
-    "100% Completed Successfully!"
-  ];
 
   useEffect(() => {
     const savedFolder = localStorage.getItem("savedTargetFolderId");
@@ -52,21 +42,13 @@ export default function DashboardPage() {
     document.body.appendChild(script);
   }, []);
 
-  // 🚀 রিফ্রেশ দিলে আগের রানিং কাজ খুঁজে বের করে রিস্টোর করার লজিক
+  // 🚀 রিফ্রেশ দিলে আগের রানিং কাজ খুঁজে বের করে রিস্টোর করার আসল লজিক
   useEffect(() => {
     const savedJobStr = localStorage.getItem("activeProcessingJob");
     if (savedJobStr) {
       try {
         const savedJob = JSON.parse(savedJobStr);
-        setLoading(true);
-        // স্ট্যাটাস চেক করছি, যদি কাজ শেষ হয়ে গিয়ে থাকে তাহলে ক্লিয়ার করে দেবো
-        checkJobStatus(savedJob.jobId).then(isDone => {
-          if (!isDone) {
-            startTrackingJob(savedJob.jobId, savedJob.percent, savedJob.stage);
-          } else {
-            localStorage.removeItem("activeProcessingJob");
-          }
-        });
+        startTrackingJob(savedJob.jobId, savedJob.percent, savedJob.stageText);
       } catch (e) {
         localStorage.removeItem("activeProcessingJob");
       }
@@ -94,30 +76,11 @@ export default function DashboardPage() {
     let interval;
     if (activeTab === "history") {
       fetchHistory(); 
+      // 🚀 প্রতি ৫ সেকেন্ড পর পর হিস্ট্রি চেক করবে, যাতে রিয়েল-টাইম পার্সেন্টেজ আপডেট হয়
       interval = setInterval(() => { fetchHistory(true); }, 5000);
     }
     return () => clearInterval(interval);
   }, [activeTab]);
-
-  useEffect(() => {
-    const progInterval = setInterval(() => {
-      setHistoryProgress(prev => {
-        let updated = { ...prev };
-        let hasChanges = false;
-        historyData.forEach(item => {
-          if (item.status === "processing") {
-            let current = updated[item._id] || 5;
-            if (current < 95) {
-              updated[item._id] = current + Math.floor(Math.random() * 5) + 1;
-              hasChanges = true;
-            }
-          }
-        });
-        return hasChanges ? updated : prev;
-      });
-    }, 5000);
-    return () => clearInterval(progInterval);
-  }, [historyData]);
 
   const handleDeleteHistory = async (id) => {
     if (!confirm("Are you sure you want to delete this link from history?")) return;
@@ -199,66 +162,56 @@ export default function DashboardPage() {
     });
   };
 
-  const checkJobStatus = async (jobId) => {
-    try {
-      const res = await fetch(`/api/status?jobId=${jobId}`);
-      const data = await res.json();
-
-      if (data.status === "completed") {
-        setProgressPercent(100);
-        setProgressStage(5);
-        setLoading(false);
-        setMessage("[Success] Video processed & transcoded successfully!");
-        setGeneratedData(data);
-        return true; 
-      } else if (data.status === "failed") {
-        setLoading(false);
-        setMessage("[Error] Server failed to process the video. Check logs.");
-        return true; 
-      }
-      return false; 
-    } catch (error) {
-      return false;
-    }
-  };
-
-  // 🚀 প্রোগ্রেস ট্র্যাক করার কমন ফাংশন (যাতে রিফ্রেশ দিলেও এখান থেকেই শুরু হতে পারে)
-  const startTrackingJob = (jobId, initialProgress = 5, initialStage = 0) => {
+  // 🚀 রিয়েল-টাইম API Polling ফাংশন
+  // 🚀 রিয়েল-টাইম API Polling ফাংশন (Cache-Busting সহ)
+  const startTrackingJob = (jobId, initialProgress = 5, initialStageText = "Initializing Engine...") => {
     setLoading(true);
     setProgressPercent(initialProgress);
-    setProgressStage(initialStage);
+    setProgressStageText(initialStageText);
 
-    let simProgress = initialProgress;
-
-    const progInterval = setInterval(() => {
-      if (simProgress < 95) {
-        simProgress += Math.floor(Math.random() * 5) + 1;
-        setProgressPercent(simProgress);
-        
-        let newStage = initialStage;
-        if (simProgress > 15 && simProgress < 35) newStage = 1;
-        else if (simProgress >= 35 && simProgress < 60) newStage = 2;
-        else if (simProgress >= 60 && simProgress < 85) newStage = 3;
-        else if (simProgress >= 85) newStage = 4;
-
-        setProgressStage(newStage);
-
-        // লোকাল স্টোরেজ আপডেট করে রাখা হচ্ছে যাতে রিফ্রেশ দিলেও মনে থাকে
-        localStorage.setItem("activeProcessingJob", JSON.stringify({
-          jobId: jobId, percent: simProgress, stage: newStage
-        }));
-      }
-    }, 5000);
-
+    // প্রতি ৩ সেকেন্ড পর পর ডাটাবেস থেকে আসল পার্সেন্টেজ চেক করবে
     const pollInterval = setInterval(async () => {
-      const isDone = await checkJobStatus(jobId);
-      if (isDone) {
-        clearInterval(pollInterval);
-        clearInterval(progInterval);
-        // কাজ শেষ হলে লোকাল স্টোরেজ থেকে রিমুভ করে দেবো
-        localStorage.removeItem("activeProcessingJob");
+      try {
+        // 🚀 _t=${Date.now()} এবং cache: 'no-store' দিয়ে Next.js এর ক্যাশ বাইপাস করা হলো
+        const res = await fetch(`/api/status?jobId=${jobId}&_t=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache", "Pragma": "no-cache", "Expires": "0" }
+        });
+        
+        const data = await res.json();
+
+        if (data.status === "completed") {
+          setProgressPercent(100);
+          setProgressStageText("100% Completed Successfully!");
+          setLoading(false);
+          setMessage("[Success] Video processed & transcoded successfully!");
+          setGeneratedData(data);
+          
+          clearInterval(pollInterval);
+          localStorage.removeItem("activeProcessingJob");
+        } else if (data.status === "failed") {
+          setLoading(false);
+          setMessage("[Error] Server failed to process the video. Check logs.");
+          
+          clearInterval(pollInterval);
+          localStorage.removeItem("activeProcessingJob");
+        } else {
+          // 🚀 ডাটাবেস থেকে রিয়েল-টাইম পার্সেন্টেজ এবং টেক্সট বসাচ্ছে
+          const currentPct = data.progress || initialProgress;
+          const currentStage = data.currentStage || initialStageText;
+          
+          setProgressPercent(currentPct);
+          setProgressStageText(currentStage);
+
+          // রিফ্রেশের জন্য লোকাল স্টোরেজ আপডেট রাখা হচ্ছে
+          localStorage.setItem("activeProcessingJob", JSON.stringify({
+            jobId: jobId, percent: currentPct, stageText: currentStage
+          }));
+        }
+      } catch (err) {
+        console.error("Error polling status:", err);
       }
-    }, 10000); 
+    }, 3000); 
   };
 
   const handleProcessVideo = async (e) => {
@@ -277,9 +230,9 @@ export default function DashboardPage() {
       const data = await response.json();
       
       if (response.ok && data.jobId) {
-        // নতুন কাজ শুরু হলে লোকাল স্টোরেজে সেভ করা হলো
-        localStorage.setItem("activeProcessingJob", JSON.stringify({ jobId: data.jobId, percent: 5, stage: 0 }));
-        startTrackingJob(data.jobId, 5, 0);
+        // নতুন কাজ শুরু হলে লোকাল স্টোরেজে সেভ করে ট্র্যাকিং শুরু
+        localStorage.setItem("activeProcessingJob", JSON.stringify({ jobId: data.jobId, percent: 5, stageText: "Initializing Engine..." }));
+        startTrackingJob(data.jobId, 5, "Initializing Engine...");
       } else {
         setLoading(false);
         setMessage(`[Error] ${data.error}`);
@@ -474,7 +427,7 @@ export default function DashboardPage() {
               {loading && (
                 <div className="progress-box">
                   <div className="progress-text">
-                    <span style={{display: 'flex', alignItems: 'center', gap: '6px'}}><IconLightning /> {stages[progressStage]}</span>
+                    <span style={{display: 'flex', alignItems: 'center', gap: '6px'}}><IconLightning /> {progressStageText}</span>
                     <span>{progressPercent}%</span>
                   </div>
                   <div className="progress-container"><div className="progress-bar" style={{ width: `${progressPercent}%` }}></div></div>
@@ -549,14 +502,6 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 historyData.map((item) => {
-                  
-                  let simProg = historyProgress[item._id] || 5;
-                  let histStageText = "Initializing Engine...";
-                  if (simProg > 20 && simProg < 45) histStageText = "Downloading raw file to server...";
-                  else if (simProg >= 45 && simProg < 70) histStageText = "Cleaning metadata & injecting subtitle...";
-                  else if (simProg >= 70 && simProg < 85) histStageText = "Uploading to Google Drive...";
-                  else if (simProg >= 85) histStageText = "Generating download APIs...";
-
                   const publicShareId = item.jobId || item._id;
 
                   return (
@@ -568,13 +513,14 @@ export default function DashboardPage() {
                         <button className="delete-btn" onClick={(e) => { e.preventDefault(); handleDeleteHistory(item._id); }}><IconTrash /> Delete Record</button>
                       </div>
                       
+                      {/* 🚀 History Tab এও রিয়েল-টাইম ডাটা শো করানো হলো */}
                       {item.status === "processing" && (
                         <div className="progress-box" style={{ marginTop: "0", marginBottom: "20px" }}>
                           <div className="progress-text">
-                            <span style={{display: 'flex', alignItems: 'center', gap: '6px'}}><IconLightning /> {histStageText}</span>
-                            <span>{simProg}%</span>
+                            <span style={{display: 'flex', alignItems: 'center', gap: '6px'}}><IconLightning /> {item.currentStage || "Processing in background..."}</span>
+                            <span>{item.progress || 0}%</span>
                           </div>
-                          <div className="progress-container"><div className="progress-bar" style={{ width: `${simProg}%` }}></div></div>
+                          <div className="progress-container"><div className="progress-bar" style={{ width: `${item.progress || 0}%` }}></div></div>
                           <p style={{ marginTop: "15px", fontSize: "13px", color: "#64748b", textAlign: "center", fontWeight: "600" }}>Running in background. Auto-updating live...</p>
                         </div>
                       )}
