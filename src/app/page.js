@@ -20,7 +20,7 @@ export default function DashboardPage() {
   
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [generatedLinks, setGeneratedLinks] = useState(null); 
+  const [generatedData, setGeneratedData] = useState(null); 
   
   const [progressStage, setProgressStage] = useState(0);
   const [progressPercent, setProgressPercent] = useState(0);
@@ -35,9 +35,9 @@ export default function DashboardPage() {
   const stages = [
     "Initializing Engine...", 
     "Downloading raw file to server...", 
-    "Cleaning metadata & injecting subtitle...", 
-    "Uploading to Google Drive...", 
-    "Generating download APIs...",
+    "Cleaning metadata & uploading Original...", 
+    "Transcoding to multiple qualities...", 
+    "Generating multiple APIs for all qualities...",
     "100% Completed Successfully!"
   ];
 
@@ -50,6 +50,27 @@ export default function DashboardPage() {
     const script = document.createElement("script");
     script.src = "https://apis.google.com/js/api.js";
     document.body.appendChild(script);
+  }, []);
+
+  // 🚀 রিফ্রেশ দিলে আগের রানিং কাজ খুঁজে বের করে রিস্টোর করার লজিক
+  useEffect(() => {
+    const savedJobStr = localStorage.getItem("activeProcessingJob");
+    if (savedJobStr) {
+      try {
+        const savedJob = JSON.parse(savedJobStr);
+        setLoading(true);
+        // স্ট্যাটাস চেক করছি, যদি কাজ শেষ হয়ে গিয়ে থাকে তাহলে ক্লিয়ার করে দেবো
+        checkJobStatus(savedJob.jobId).then(isDone => {
+          if (!isDone) {
+            startTrackingJob(savedJob.jobId, savedJob.percent, savedJob.stage);
+          } else {
+            localStorage.removeItem("activeProcessingJob");
+          }
+        });
+      } catch (e) {
+        localStorage.removeItem("activeProcessingJob");
+      }
+    }
   }, []);
 
   const fetchHistory = async (silent = false) => {
@@ -187,15 +208,8 @@ export default function DashboardPage() {
         setProgressPercent(100);
         setProgressStage(5);
         setLoading(false);
-        setMessage("[Success] Video processed successfully!");
-        setGeneratedLinks({
-          jobId: jobId, 
-          driveLink: data.driveLink,
-          gofile: data.gofileLink || "Not generated",
-          dlDokan: data.dlDokanLink || "Not generated",
-          gcloud: data.gcloudLink || "Not generated",
-          driveCloud: data.driveCloudLink || "Not generated" 
-        });
+        setMessage("[Success] Video processed & transcoded successfully!");
+        setGeneratedData(data);
         return true; 
       } else if (data.status === "failed") {
         setLoading(false);
@@ -208,13 +222,50 @@ export default function DashboardPage() {
     }
   };
 
+  // 🚀 প্রোগ্রেস ট্র্যাক করার কমন ফাংশন (যাতে রিফ্রেশ দিলেও এখান থেকেই শুরু হতে পারে)
+  const startTrackingJob = (jobId, initialProgress = 5, initialStage = 0) => {
+    setLoading(true);
+    setProgressPercent(initialProgress);
+    setProgressStage(initialStage);
+
+    let simProgress = initialProgress;
+
+    const progInterval = setInterval(() => {
+      if (simProgress < 95) {
+        simProgress += Math.floor(Math.random() * 5) + 1;
+        setProgressPercent(simProgress);
+        
+        let newStage = initialStage;
+        if (simProgress > 15 && simProgress < 35) newStage = 1;
+        else if (simProgress >= 35 && simProgress < 60) newStage = 2;
+        else if (simProgress >= 60 && simProgress < 85) newStage = 3;
+        else if (simProgress >= 85) newStage = 4;
+
+        setProgressStage(newStage);
+
+        // লোকাল স্টোরেজ আপডেট করে রাখা হচ্ছে যাতে রিফ্রেশ দিলেও মনে থাকে
+        localStorage.setItem("activeProcessingJob", JSON.stringify({
+          jobId: jobId, percent: simProgress, stage: newStage
+        }));
+      }
+    }, 5000);
+
+    const pollInterval = setInterval(async () => {
+      const isDone = await checkJobStatus(jobId);
+      if (isDone) {
+        clearInterval(pollInterval);
+        clearInterval(progInterval);
+        // কাজ শেষ হলে লোকাল স্টোরেজ থেকে রিমুভ করে দেবো
+        localStorage.removeItem("activeProcessingJob");
+      }
+    }, 10000); 
+  };
+
   const handleProcessVideo = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setGeneratedLinks(null);
+    setGeneratedData(null);
     setMessage("");
-    setProgressPercent(5);
-    setProgressStage(0);
 
     try {
       const response = await fetch("/api/process", {
@@ -226,26 +277,9 @@ export default function DashboardPage() {
       const data = await response.json();
       
       if (response.ok && data.jobId) {
-        let simProgress = 5;
-        const progInterval = setInterval(() => {
-          if (simProgress < 95) {
-            simProgress += Math.floor(Math.random() * 5) + 1;
-            setProgressPercent(simProgress);
-            
-            if (simProgress > 20 && simProgress < 45) setProgressStage(1);
-            else if (simProgress >= 45 && simProgress < 70) setProgressStage(2);
-            else if (simProgress >= 70 && simProgress < 85) setProgressStage(3);
-            else if (simProgress >= 85) setProgressStage(4);
-          }
-        }, 5000);
-
-        const pollInterval = setInterval(async () => {
-          const isDone = await checkJobStatus(data.jobId);
-          if (isDone) {
-            clearInterval(pollInterval);
-            clearInterval(progInterval);
-          }
-        }, 10000); 
+        // নতুন কাজ শুরু হলে লোকাল স্টোরেজে সেভ করা হলো
+        localStorage.setItem("activeProcessingJob", JSON.stringify({ jobId: data.jobId, percent: 5, stage: 0 }));
+        startTrackingJob(data.jobId, 5, 0);
       } else {
         setLoading(false);
         setMessage(`[Error] ${data.error}`);
@@ -323,6 +357,20 @@ export default function DashboardPage() {
         .delete-btn { display: flex; align-items: center; justify-content: center; gap: 6px; background: #fff1f2; border: 1px solid #fecdd3; color: #e11d48; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 13px; transition: 0.2s; white-space: nowrap; }
         .delete-btn:hover { background-color: #ffe4e6; border-color: #fda4af; }
 
+        /* 🚀 New CSS For Quality Details Toggle Block */
+        .quality-section { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 15px; margin-bottom: 15px; }
+        .quality-badge { display: inline-block; padding: 4px 10px; background: #047857; color: white; border-radius: 6px; font-size: 12px; font-weight: 800; margin-bottom: 10px; }
+        
+        .api-links-details { margin-top: 10px; }
+        .toggle-summary { background: #e2e8f0; color: #334155; padding: 12px 15px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; list-style: none; display: flex; justify-content: center; align-items: center; transition: 0.2s; user-select: none; border: 1px solid #cbd5e1; }
+        .toggle-summary::-webkit-details-marker { display: none; }
+        .toggle-summary:hover { background: #cbd5e1; }
+        .toggle-summary::after { content: '▼ Show API Links'; font-size: 13px; }
+        details[open] .toggle-summary::after { content: '▲ Hide API Links'; }
+        
+        .hidden-links-container { padding-top: 15px; animation: slideDown 0.3s ease; border-top: 2px dashed #cbd5e1; margin-top: 15px; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
         @media (max-width: 768px) {
           .dashboard-layout { flex-direction: column; }
           .sidebar { position: fixed; left: 0; top: 0; bottom: 0; transform: ${sidebarOpen ? 'translateX(0)' : 'translateX(-100%)'}; }
@@ -351,7 +399,6 @@ export default function DashboardPage() {
           <div style={{ display: "inline-flex", padding: "12px", background: "rgba(255,255,255,0.1)", borderRadius: "12px", marginBottom: "10px", color: "white" }}>
              <IconRocket />
           </div>
-          {/* 🚀 এখানে justify+Content কে ফিক্স করে justifyContent করা হয়েছে */}
           <h2 style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", fontSize: "20px", margin: 0, fontWeight: "900", letterSpacing: "1px" }}>
             <IconGear /> ENGINE PANEL
           </h2>
@@ -442,23 +489,46 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {generatedLinks && !loading && (
+            {generatedData && !loading && (
               <div style={{ marginTop: "40px" }}>
                 <h3 style={{ borderBottom: "3px solid #d1fae5", paddingBottom: "15px", marginBottom: "30px", color: "#064e3b", fontSize: "22px", fontWeight: "900", display: "flex", alignItems: "center", gap: "10px" }}><IconLightning /> Final Generated Links</h3>
                 
-                <div className="link-card" style={{ border: "2px solid #ec4899", background: "#fdf2f8" }}>
-                  <div className="link-label" style={{ color: "#be185d" }}>Public Share:</div>
-                  <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
-                    {typeof window !== "undefined" ? window.location.origin : ""}/share/{generatedLinks.jobId}
-                  </div>
-                  <button className="copy-btn" style={{ background: "#ec4899" }} onClick={() => copyToClipboard(`${window.location.origin}/share/${generatedLinks.jobId}`)}>COPY</button>
-                </div>
+                {generatedData.qualities && generatedData.qualities.length > 0 ? (
+                    generatedData.qualities.map((q, idx) => (
+                      <div key={idx} className="quality-section">
+                        <span className="quality-badge">{q.quality} ({q.fileSize})</span>
+                        
+                        <div className="link-card" style={{ padding: "12px", borderLeft: "4px solid #ec4899", background: "#fdf2f8", marginTop: "10px", marginBottom: "0" }}>
+                          <div className="link-label" style={{ color: "#be185d" }}>Public Page:</div>
+                          <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
+                            {typeof window !== "undefined" ? window.location.origin : ""}/share/{generatedData.jobId}?q={q.quality}
+                          </div>
+                          <button className="copy-btn" style={{ background: "#ec4899" }} onClick={(e) => { e.preventDefault(); copyToClipboard(`${window.location.origin}/share/${generatedData.jobId}?q=${q.quality}`); }}>COPY</button>
+                        </div>
 
-                <div className="link-card"><div className="link-label">Drive Link:</div><div className="link-text" style={{ color: "#2563eb", fontWeight: "bold" }}>{generatedLinks.driveLink}</div><button className="copy-btn" onClick={() => copyToClipboard(generatedLinks.driveLink)}>COPY</button></div>
-                <div className="link-card"><div className="link-label">Gofile:</div><div className="link-text">{generatedLinks.gofile}</div><button className="copy-btn" onClick={() => copyToClipboard(generatedLinks.gofile)}>COPY</button></div>
-                <div className="link-card"><div className="link-label">DL Dokan:</div><div className="link-text">{generatedLinks.dlDokan}</div><button className="copy-btn" onClick={() => copyToClipboard(generatedLinks.dlDokan)}>COPY</button></div>
-                <div className="link-card"><div className="link-label">Drive Cloud:</div><div className="link-text">{generatedLinks.driveCloud}</div><button className="copy-btn" onClick={() => copyToClipboard(generatedLinks.driveCloud)}>COPY</button></div>
-                <div className="link-card"><div className="link-label">Gcloud:</div><div className="link-text">{generatedLinks.gcloud}</div><button className="copy-btn" onClick={() => copyToClipboard(generatedLinks.gcloud)}>COPY</button></div>
+                        <details className="api-links-details">
+                          <summary className="toggle-summary"></summary>
+                          <div className="hidden-links-container">
+                            <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive:</div><div className="link-text" style={{ color: "#2563eb" }}>{q.driveLink || "Not found"}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.driveLink); }}>COPY</button></div>
+                            <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gofile:</div><div className="link-text">{q.gofileLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.gofileLink); }}>COPY</button></div>
+                            <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">DL Dokan:</div><div className="link-text">{q.dlDokanLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.dlDokanLink); }}>COPY</button></div>
+                            <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive Cloud:</div><div className="link-text">{q.driveCloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.driveCloudLink); }}>COPY</button></div>
+                            <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gcloud:</div><div className="link-text">{q.gcloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.gcloudLink); }}>COPY</button></div>
+                          </div>
+                        </details>
+                      </div>
+                    ))
+                ) : (
+                    <div className="quality-section">
+                      <div className="link-card" style={{ padding: "12px", borderLeft: "4px solid #ec4899", background: "#fdf2f8" }}>
+                        <div className="link-label" style={{ color: "#be185d" }}>Public Page:</div>
+                        <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
+                          {typeof window !== "undefined" ? window.location.origin : ""}/share/{generatedData.jobId}
+                        </div>
+                        <button className="copy-btn" style={{ background: "#ec4899" }} onClick={() => copyToClipboard(`${window.location.origin}/share/${generatedData.jobId}`)}>COPY</button>
+                      </div>
+                    </div>
+                )}
               </div>
             )}
           </>
@@ -517,19 +587,55 @@ export default function DashboardPage() {
 
                       {item.status !== "failed" && item.status !== "processing" && (
                         <>
-                          <div className="link-card" style={{ padding: "12px", borderLeft: "4px solid #ec4899", background: "#fdf2f8" }}>
-                            <div className="link-label" style={{ color: "#be185d" }}>Public Page:</div>
-                            <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
-                              {typeof window !== "undefined" ? window.location.origin : ""}/share/{publicShareId}
-                            </div>
-                            <button className="copy-btn" style={{ background: "#ec4899", padding: "8px 15px", fontSize: "12px" }} onClick={(e) => { e.preventDefault(); copyToClipboard(`${window.location.origin}/share/${publicShareId}`); }}>COPY</button>
-                          </div>
+                          {item.qualities && item.qualities.length > 0 ? (
+                            item.qualities.map((q, idx) => (
+                              <div key={idx} className="quality-section">
+                                <span className="quality-badge">{q.quality} ({q.fileSize})</span>
+                                
+                                <div className="link-card" style={{ padding: "12px", borderLeft: "4px solid #ec4899", background: "#fdf2f8", marginTop: "10px", marginBottom: "0" }}>
+                                  <div className="link-label" style={{ color: "#be185d" }}>Public Page:</div>
+                                  <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
+                                    {typeof window !== "undefined" ? window.location.origin : ""}/share/{publicShareId}?q={q.quality}
+                                  </div>
+                                  <button className="copy-btn" style={{ background: "#ec4899", padding: "8px 15px", fontSize: "12px" }} onClick={(e) => { e.preventDefault(); copyToClipboard(`${window.location.origin}/share/${publicShareId}?q=${q.quality}`); }}>COPY</button>
+                                </div>
 
-                          <div className="link-card" style={{ padding: "12px" }}><div className="link-label">Drive:</div><div className="link-text" style={{ color: "#2563eb" }}>{item.driveLink || "Not found"}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.driveLink); }}>COPY</button></div>
-                          <div className="link-card" style={{ padding: "12px" }}><div className="link-label">Gofile:</div><div className="link-text">{item.gofileLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.gofileLink); }}>COPY</button></div>
-                          <div className="link-card" style={{ padding: "12px" }}><div className="link-label">DL Dokan:</div><div className="link-text">{item.dlDokanLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.dlDokanLink); }}>COPY</button></div>
-                          <div className="link-card" style={{ padding: "12px" }}><div className="link-label">Drive Cloud:</div><div className="link-text">{item.driveCloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.driveCloudLink); }}>COPY</button></div>
-                          <div className="link-card" style={{ padding: "12px" }}><div className="link-label">Gcloud:</div><div className="link-text">{item.gcloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.gcloudLink); }}>COPY</button></div>
+                                <details className="api-links-details">
+                                  <summary className="toggle-summary"></summary>
+                                  <div className="hidden-links-container">
+                                    <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive:</div><div className="link-text" style={{ color: "#2563eb" }}>{q.driveLink || "Not found"}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.driveLink); }}>COPY</button></div>
+                                    <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gofile:</div><div className="link-text">{q.gofileLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.gofileLink); }}>COPY</button></div>
+                                    <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">DL Dokan:</div><div className="link-text">{q.dlDokanLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.dlDokanLink); }}>COPY</button></div>
+                                    <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive Cloud:</div><div className="link-text">{q.driveCloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.driveCloudLink); }}>COPY</button></div>
+                                    <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gcloud:</div><div className="link-text">{q.gcloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(q.gcloudLink); }}>COPY</button></div>
+                                  </div>
+                                </details>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="quality-section">
+                              <span className="quality-badge" style={{background: '#64748b'}}>Legacy Data</span>
+                              
+                              <div className="link-card" style={{ padding: "12px", borderLeft: "4px solid #ec4899", background: "#fdf2f8", marginTop: "10px", marginBottom: "0" }}>
+                                <div className="link-label" style={{ color: "#be185d" }}>Public Page:</div>
+                                <div className="link-text" style={{ color: "#ec4899", fontWeight: "bold", background: "white" }}>
+                                  {typeof window !== "undefined" ? window.location.origin : ""}/share/{publicShareId}
+                                </div>
+                                <button className="copy-btn" style={{ background: "#ec4899", padding: "8px 15px", fontSize: "12px" }} onClick={(e) => { e.preventDefault(); copyToClipboard(`${window.location.origin}/share/${publicShareId}`); }}>COPY</button>
+                              </div>
+
+                              <details className="api-links-details">
+                                <summary className="toggle-summary"></summary>
+                                <div className="hidden-links-container">
+                                  <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive:</div><div className="link-text" style={{ color: "#2563eb" }}>{item.driveLink || "Not found"}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.driveLink); }}>COPY</button></div>
+                                  <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gofile:</div><div className="link-text">{item.gofileLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.gofileLink); }}>COPY</button></div>
+                                  <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">DL Dokan:</div><div className="link-text">{item.dlDokanLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.dlDokanLink); }}>COPY</button></div>
+                                  <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Drive Cloud:</div><div className="link-text">{item.driveCloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.driveCloudLink); }}>COPY</button></div>
+                                  <div className="link-card" style={{ padding: "10px", margin: "5px 0" }}><div className="link-label">Gcloud:</div><div className="link-text">{item.gcloudLink}</div><button className="copy-btn" onClick={(e) => { e.preventDefault(); copyToClipboard(item.gcloudLink); }}>COPY</button></div>
+                                </div>
+                              </details>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>

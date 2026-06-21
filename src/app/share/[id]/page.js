@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 
 // 🚀 Premium SVG Icons
 const IconLightningCloud = () => ( <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" /><polyline points="13 11 9 17 15 17 11 23" /></svg> );
@@ -14,7 +14,10 @@ const IconCheck = () => ( <svg width="18" height="18" viewBox="0 0 24 24" fill="
 
 export default function PublicSharePage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params?.id;
+  const requestedQuality = searchParams?.get("q");
+  
   const [movie, setMovie] = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -46,7 +49,6 @@ export default function PublicSharePage() {
     }
   };
 
-  // 🚀 Abyss.to এম্বেড URL জেনারেটর
   const getAbyssEmbedUrl = (abyssId) => {
     if (!abyssId) return "";
     return `https://abyssplayer.com/${abyssId}`; 
@@ -85,15 +87,42 @@ export default function PublicSharePage() {
     );
   }
 
+  let qData = null;
+  if (movie.qualities && movie.qualities.length > 0) {
+    if (requestedQuality) {
+      qData = movie.qualities.find(q => q.quality === requestedQuality);
+      if (!qData) qData = movie.qualities[0]; 
+    } else {
+      qData = movie.qualities[0];
+    }
+  } else {
+    qData = {
+      quality: "Default",
+      movieName: movie.movieName,
+      fileSize: movie.fileSize,
+      abyssId: movie.abyssId,
+      driveLink: movie.driveLink,
+      dlDokanLink: movie.dlDokanLink,
+      gofileLink: movie.gofileLink,
+      driveCloudLink: movie.driveCloudLink,
+      gcloudLink: movie.gcloudLink
+    };
+  }
+
   const dateObj = movie.createdAt ? new Date(movie.createdAt) : new Date();
   const formattedDate = dateObj.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+  // 🚀 মুভির নাম ঠিক করা হলো (মেইন ডাটাবেস থেকে নাম নিয়ে কারেন্ট কোয়ালিটি বসিয়ে দেওয়া হবে)
+  const displayTitle = movie.movieName 
+    ? movie.movieName.replace(/(4K|1080p|720p|480p)/, qData.quality !== "Default" ? qData.quality : "")
+    : "MovieNewsBD Exclusive";
 
   return (
     <div className="share-layout">
       <style dangerouslySetInnerHTML={{ __html: `
         body { margin: 0; background: #f0f4f8; color: #333; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
         .share-layout { display: flex; align-items: flex-start; justify-content: center; min-height: 100vh; padding: 20px; box-sizing: border-box; }
-        .main-card { background: #ffffff; border-radius: 16px; width: 100%; max-width: 500px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); overflow: hidden; padding-bottom: 20px; border: 1px solid #e2e8f0; }
+        .main-card { background: #ffffff; border-radius: 16px; width: 100%; max-width: 500px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); overflow: hidden; padding-bottom: 20px; border: 1px solid #e2e8f0; margin-bottom: 30px; }
         .brand-header { padding: 15px 20px; background-color: white; border-bottom: 1px solid #e2e8f0; text-align: center; position: relative; }
         .header-content { display: inline-flex; align-items: center; justify-content: center; } 
         .status-dot { height: 12px; width: 12px; background-color: #22c55e; border-radius: 50%; display: inline-block; margin-right: 10px; margin-top: 2px; animation: pulseDot 1.5s infinite; }
@@ -104,24 +133,21 @@ export default function PublicSharePage() {
         .info-label { color: #64748b; font-weight: 500; }
         .info-value { color: #1e293b; font-weight: 700; text-align: right; word-break: break-word; max-width: 60%; }
         
-        /* 🚀 New Watch Online Title */
         .watch-section-title { text-align: center; color: #0f172a; font-size: 22px; font-weight: 900; margin: 30px 0 5px; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .watch-section-title span { color: #ef4444; }
 
-        /* 🚀 Moving RGB Backlight Wrapper */
         .rgb-wrapper { position: relative; margin: 15px 20px 25px; border-radius: 12px; z-index: 1; }
         .rgb-wrapper::before { 
           content: ""; position: absolute; 
-          top: -2.5px; left: -2.5px; right: -2.5px; bottom: -2.5px; /* olpo width */
+          top: -2.5px; left: -2.5px; right: -2.5px; bottom: -2.5px; 
           background: linear-gradient(90deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000); 
           background-size: 400%; z-index: -1; border-radius: 14px; 
           animation: rgbGlow 8s linear infinite; filter: blur(4px); opacity: 0.85; 
         }
         @keyframes rgbGlow { 0% { background-position: 0 0; } 100% { background-position: 400% 0; } }
 
-        /* 🚀 Inline Video Player */
         .video-container { border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 8px 25px rgba(0,0,0,0.15); position: relative; z-index: 2; }
-        .video-aspect-ratio { position: relative; width: 100%; padding-top: 56.25%; /* 16:9 Aspect Ratio */ }
+        .video-aspect-ratio { position: relative; width: 100%; padding-top: 56.25%; }
         .video-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; background: #000; z-index: 5; }
         .player-preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, #1e293b, #0f172a); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: white; transition: all 0.3s ease; z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; user-select: none; }
         .player-preview:hover .play-icon-circle { transform: scale(1.1); box-shadow: 0 0 20px rgba(6, 182, 212, 0.5); }
@@ -149,81 +175,92 @@ export default function PublicSharePage() {
         .copy-btn.copied { background: linear-gradient(135deg, #16a34a, #22c55e); box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3); }
         .footer { text-align: center; margin-top: 20px; font-size: 14px; font-weight: 600; color: #475569; }
         
+        .main-container-wrapper { display: flex; flex-direction: column; align-items: center; width: 100%; }
+
         @media (max-width: 600px) { .share-layout { padding: 10px; } .main-card { border-radius: 12px; } .watch-section-title { font-size: 18px; margin: 25px 0 5px; } .rgb-wrapper { margin: 15px; } .play-icon-circle { width: 50px; height: 50px; } .play-icon-circle svg { width: 22px; height: 22px; } .preview-text { font-size: 14px; } .dl-btn { font-size: 13px; padding: 12px 14px; flex-direction: row; } .btn-left { font-size: 12px; gap: 6px; } .btn-right { gap: 6px; } .badge { font-size: 9px; padding: 2px 6px; } .title-box { font-size: 15px; padding: 15px; } .info-row { font-size: 13px; padding: 12px 15px; } .brand-title { font-size: 14px; } .status-dot { height: 10px; width: 10px; } }
       `}} />
 
-      <div className="main-card">
-        <div className="brand-header">
-          <div className="header-content">
-            <span className="status-dot"></span>
-            <span className="brand-title">MovienewsBD Cloud Downloader</span>
-          </div>
-        </div>
-
-        <div className="title-box">{movie.movieName || "MovieNewsBD Exclusive"}</div>
-
-        <div className="info-row"><span className="info-label">File Size</span><span className="info-value">{movie.fileSize || "Unknown"}</span></div>
-        <div className="info-row"><span className="info-label">File Type</span><span className="info-value">video/x-matroska</span></div>
-        <div className="info-row"><span className="info-label">Share Date</span><span className="info-value">{formattedDate}</span></div>
-
-        {/* 🎬 Watch Online Title (New) */}
-        <div className="watch-section-title">
-          <span>▶</span> Watch Online
-        </div>
-
-        {/* 🎬 Beautiful Inline Player with RGB Backlight (New) */}
-        <div className="rgb-wrapper">
-          <div className="video-container">
-            <div className="video-aspect-ratio">
-              {!isPlaying ? (
-                <div 
-                  className="player-preview" 
-                  onClick={() => {
-                    if (movie.abyssId) setIsPlaying(true);
-                    else alert("⚠️ Player is processing! ফাইলটি Abyss সার্ভারে আপলোড হচ্ছে। একটু পর আবার চেষ্টা করুন।");
-                  }}
-                >
-                  <div className="play-icon-circle">
-                    <svg viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  </div>
-                  <span className="preview-text">Click to Play</span>
-                </div>
-              ) : (
-                <iframe
-                  src={getAbyssEmbedUrl(movie.abyssId)}
-                  allowFullScreen={true}
-                  webkitallowfullscreen="true"
-                  mozallowfullscreen="true"
-                  className="video-iframe"
-                ></iframe>
-              )}
+      <div className="main-container-wrapper">
+        <div className="main-card">
+          <div className="brand-header">
+            <div className="header-content">
+              <span className="status-dot"></span>
+              <span className="brand-title">MovienewsBD Cloud Downloader</span>
             </div>
           </div>
+
+          <div className="title-box">
+            {displayTitle}
+          </div>
+
+          <div className="info-row">
+            <span className="info-label">Quality</span>
+            <span className="info-value" style={{ color: "#ef4444" }}>{qData.quality}</span>
+          </div>
+          <div className="info-row">
+            <span className="info-label">File Size</span>
+            <span className="info-value">{qData.fileSize || "Unknown"}</span>
+          </div>
+          <div className="info-row">
+            <span className="info-label">Share Date</span>
+            <span className="info-value">{formattedDate}</span>
+          </div>
+
+          <div className="watch-section-title">
+            <span>▶</span> Watch Online
+          </div>
+
+          <div className="rgb-wrapper">
+            <div className="video-container">
+              <div className="video-aspect-ratio">
+                {!isPlaying ? (
+                  <div 
+                    className="player-preview" 
+                    onClick={() => {
+                      if (qData.abyssId) setIsPlaying(true);
+                      else alert("⚠️ Player is processing! ফাইলটি Abyss সার্ভারে আপলোড হচ্ছে। একটু পর আবার চেষ্টা করুন।");
+                    }}
+                  >
+                    <div className="play-icon-circle">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    </div>
+                    <span className="preview-text">Click to Play {qData.quality}</span>
+                  </div>
+                ) : (
+                  <iframe
+                    src={getAbyssEmbedUrl(qData.abyssId)}
+                    allowFullScreen={true}
+                    webkitallowfullscreen="true"
+                    mozallowfullscreen="true"
+                    className="video-iframe"
+                  ></iframe>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="notice-title">Download {qData.quality}</div>
+          <div className="warning-box">⚡ কোনো একটি সার্ভার SLOW কাজ করলে, অন্য অপশন ব্যবহার করুন 🔄</div>
+          <div className="server-title">🚀 High-Speed Servers 👇</div>
+
+          <div className="btn-container">
+            <a href={qData.driveLink ? getDirectDownloadUrl(qData.driveLink) : "#"} onClick={(e) => handleLinkClick(e, qData.driveLink)} target="_blank" rel="noreferrer" className="dl-btn btn-instant"><div className="btn-left"><IconLightningCloud /> Instant Download</div><div className="btn-right"><span className="badge badge-dark">High-Speed</span> <IconArrowDown /></div></a>
+            <a href={qData.dlDokanLink || "#"} onClick={(e) => handleLinkClick(e, qData.dlDokanLink)} target="_blank" rel="noreferrer" className="dl-btn btn-dldokan"><div className="btn-left"><IconRocket /> Download [Fast Cloud]</div><div className="btn-right"><span className="badge badge-red">New</span> <IconArrowDown /></div></a>
+            <a href={qData.gofileLink || "#"} onClick={(e) => handleLinkClick(e, qData.gofileLink)} target="_blank" rel="noreferrer" className="dl-btn btn-gocloud"><div className="btn-left"><IconDownload /> Direct Download Now</div><div className="btn-right"><IconArrowDown /></div></a>
+            <a href={qData.driveCloudLink || "#"} onClick={(e) => handleLinkClick(e, qData.driveCloudLink)} target="_blank" rel="noreferrer" className="dl-btn btn-drivecloud"><div className="btn-left"><IconCloudDown /> Download [Always Work]</div><div className="btn-right"><IconArrowDown /></div></a>
+            <a href={qData.gcloudLink || "#"} onClick={(e) => handleLinkClick(e, qData.gcloudLink)} target="_blank" rel="noreferrer" className="dl-btn btn-gcloud"><div className="btn-left"><IconServer /> G Cloud [10Gbps]</div><div className="btn-right"><IconArrowDown /></div></a>
+          </div>
+
+          <div className="copy-section">
+            <input type="text" readOnly value={typeof window !== "undefined" ? window.location.href : ""} className="link-input" />
+            <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={handleCopy}>
+              {copied ? <><IconCheck /> Copied to Clipboard!</> : <><IconCopy /> Copy Link</>}
+            </button>
+          </div>
+          <div className="footer">Made with ❤️ by MovieNewsBD.com</div>
         </div>
-
-        <div className="notice-title">Download Link Generated</div>
-        <div className="warning-box">⚡ কোনো একটি সার্ভার SLOW কাজ করলে, অন্য অপশন ব্যবহার করুন 🔄</div>
-        <div className="server-title">🚀 High-Speed Servers 👇</div>
-
-        {/* Download Buttons */}
-        <div className="btn-container">
-          <a href={movie.driveLink ? getDirectDownloadUrl(movie.driveLink) : "#"} onClick={(e) => handleLinkClick(e, movie.driveLink)} target="_blank" rel="noreferrer" className="dl-btn btn-instant"><div className="btn-left"><IconLightningCloud /> Instant Download</div><div className="btn-right"><span className="badge badge-dark">High-Speed</span> <IconArrowDown /></div></a>
-          <a href={movie.dlDokanLink || "#"} onClick={(e) => handleLinkClick(e, movie.dlDokanLink)} target="_blank" rel="noreferrer" className="dl-btn btn-dldokan"><div className="btn-left"><IconRocket /> Download [Fast Cloud]</div><div className="btn-right"><span className="badge badge-red">New</span> <IconArrowDown /></div></a>
-          <a href={movie.gofileLink || "#"} onClick={(e) => handleLinkClick(e, movie.gofileLink)} target="_blank" rel="noreferrer" className="dl-btn btn-gocloud"><div className="btn-left"><IconDownload /> Direct Download Now</div><div className="btn-right"><IconArrowDown /></div></a>
-          <a href={movie.driveCloudLink || "#"} onClick={(e) => handleLinkClick(e, movie.driveCloudLink)} target="_blank" rel="noreferrer" className="dl-btn btn-drivecloud"><div className="btn-left"><IconCloudDown /> Download [Always Work]</div><div className="btn-right"><IconArrowDown /></div></a>
-          <a href={movie.gcloudLink || "#"} onClick={(e) => handleLinkClick(e, movie.gcloudLink)} target="_blank" rel="noreferrer" className="dl-btn btn-gcloud"><div className="btn-left"><IconServer /> G Cloud [10Gbps]</div><div className="btn-right"><IconArrowDown /></div></a>
-        </div>
-
-        <div className="copy-section">
-          <input type="text" readOnly value={typeof window !== "undefined" ? window.location.href : ""} className="link-input" />
-          <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={handleCopy}>
-            {copied ? <><IconCheck /> Copied to Clipboard!</> : <><IconCopy /> Copy Link</>}
-          </button>
-        </div>
-
-        <div className="footer">Made with ❤️ by MovieNewsBD.com</div>
       </div>
     </div>
    );

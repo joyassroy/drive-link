@@ -6,6 +6,7 @@ import subprocess
 import urllib.parse
 import argparse
 import uuid
+import json
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
@@ -58,12 +59,12 @@ class HeadlessDriveManager:
         except Exception:
             return "Unknown_Movie", ".mkv"
 
-    def upload_movie(self, file_path, folder_id):
+    def upload_movie(self, file_path, folder_id, display_name=None):
         if not self.service:
             print("[Warning] Service not connected!")
             return None
 
-        file_name = os.path.basename(file_path)
+        file_name = display_name if display_name else os.path.basename(file_path)
         print(f"[Upload] Uploading '{file_name}' to Google Drive...")
 
         file_metadata = {
@@ -87,9 +88,6 @@ class HeadlessDriveManager:
                 body={'type': 'anyone', 'role': 'reader'}
             ).execute()
             print("[Success] File is now publicly accessible.")
-
-            full_drive_link = f"https://drive.google.com/file/d/{drive_id}/view"
-            print(f"__FINAL_DRIVE_LINK__={full_drive_link}")
             
             return drive_id
         except HttpError as error:
@@ -113,14 +111,6 @@ def get_url_file_info(url):
         ext = ".mp4" 
         
     return name_without_ext, ext
-
-def get_video_resolution(file_path):
-    try:
-        cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "{file_path}"'
-        output = subprocess.check_output(cmd, shell=True, text=True).strip()
-        if output.isdigit(): return f"{output}p"
-    except Exception: pass
-    return ""
 
 def create_promo_subtitle(brand_name):
     srt_content = f"""1
@@ -148,11 +138,10 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
         original_name, file_ext = get_url_file_info(video_url)
 
     base_movie_name = custom_name.strip() if custom_name else original_name
-
     process_id = uuid.uuid4().hex[:8]
     temp_filename = f"downloaded_raw_{process_id}{file_ext}"
 
-    # 1. Download
+    # 1. Download Raw File
     if drive_file_id:
         success = drive_manager.download_drive_file(drive_file_id, temp_filename)
         if not success: return
@@ -187,57 +176,100 @@ def process_and_upload_movie(video_url, folder_id, client_id, client_secret, ref
             print(f"[Error] Download failed: {e}")
             return
 
-    # 2. Extract Resolution & File Size Early
-    resolution = get_video_resolution(temp_filename)
-    res_text = f" {resolution}" if resolution else ""
-    
-    # 🚀 File Size Logic Added Here
+    # 2. Get Original Resolution
+    orig_height = 720 # Default fallback
     if os.path.exists(temp_filename):
-        size_bytes = os.path.getsize(temp_filename)
-        size_mb = size_bytes / (1024 * 1024)
-        if size_mb >= 1024:
-            size_str = f"{size_mb / 1024:.2f} GB"
-        else:
-            size_str = f"{size_mb:.2f} MB"
-        print(f"__FILE_SIZE__={size_str}")
-    
-    final_display_name = f"{client_brand_name} {base_movie_name}{res_text}".strip()
-    final_display_name = re.sub(r'\s+', ' ', final_display_name) 
-    
-    final_upload_name = f"{final_display_name}{file_ext}"
+        try:
+            cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "{temp_filename}"'
+            output = subprocess.check_output(cmd, shell=True, text=True).strip()
+            if output.isdigit():
+                orig_height = int(output)
+        except Exception: pass
 
-    # 3. Metadata Processing & Subtitle Injection
+    # 🚀 সলিড কোয়ালিটি টার্গেট লজিক
+    targets = []
+    if orig_height >= 2160: targets = [2160, 1080, 720, 480]
+    elif orig_height >= 1080: targets = [1080, 720, 480]
+    elif orig_height >= 720: targets = [720, 480]
+    else: targets = [480]
+
     promo_srt = create_promo_subtitle(client_brand_name)
-    print(f"[Process] Applying metadata and adding promo subtitle for 5 seconds...")
+    sub_codec = "mov_text" if file_ext in [".mp4", ".mov", ".m4v"] else "srt"
+    
+    master_filename = f"master_clean_{process_id}{file_ext}"
 
+    # STEP 3: Create Clean Master File
+    print("[Process] Creating Clean Master File with Promo Subtitle...")
     try:
-        sub_codec = "mov_text" if file_ext in [".mp4", ".mov", ".m4v"] else "srt"
-        cmd = f'ffmpeg -i "{temp_filename}" -i "{promo_srt}" -map_metadata -1 -map 0:v? -map 0:a? -map 1:s -c copy -c:s {sub_codec} -metadata title="{final_display_name}" -metadata:s:v title="{final_display_name}" -metadata:s:a title="{final_display_name}" -metadata:s:s:0 title="{client_brand_name}" -metadata:s:s:0 language=ben "{final_upload_name}" -y'
-        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+        cmd_master = f'ffmpeg -i "{temp_filename}" -i "{promo_srt}" -map_metadata -1 -map 0:v? -map 0:a? -map 1:s -c copy -c:s {sub_codec} -max_muxing_queue_size 1024 -metadata:s:s:0 title="{client_brand_name}" -metadata:s:s:0 language=ben "{master_filename}" -y'
+        subprocess.run(cmd_master, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
-        print(f"[Error] Processing failed: {e}")
-        if os.path.exists(temp_filename): os.remove(temp_filename)
-        if os.path.exists(promo_srt): os.remove(promo_srt)
+        print(f"[Error] Master file creation failed: {e}")
         return
-    finally:
-        if os.path.exists(temp_filename): os.remove(temp_filename)
-        if os.path.exists(promo_srt): os.remove(promo_srt)
 
-    # 4. Upload & Cleanup
-    drive_manager.upload_movie(final_upload_name, folder_id)
-    if os.path.exists(final_upload_name): os.remove(final_upload_name)
+    # STEP 4: Delete Raw File
+    if os.path.exists(temp_filename): os.remove(temp_filename)
+    if os.path.exists(promo_srt): os.remove(promo_srt)
+
+    generated_links_array = []
+
+    # STEP 5: Loop to generate multiple qualities
+    for height in targets:
+        # 🚀 নিখুঁত নামকরণের লজিক
+        if height >= 2160: q_name = "4K"
+        else: q_name = f"{height}p"
+
+        final_display_name = f"{client_brand_name} {base_movie_name} {q_name}".strip()
+        final_display_name = re.sub(r'\s+', ' ', final_display_name) 
+        q_filename = f"{process_id}_{q_name}{file_ext}"
+
+        print(f"[Process] Generating {q_name} quality...")
+
+        try:
+            if height >= orig_height - 50:
+                cmd = f'ffmpeg -i "{master_filename}" -map 0 -c copy -max_muxing_queue_size 1024 -map_metadata -1 -metadata title="{final_display_name}" -metadata:s:v title="{final_display_name}" -metadata:s:a title="{final_display_name}" "{q_filename}" -y'
+            else:
+                cmd = f'ffmpeg -i "{master_filename}" -map 0:v:0 -map 0:a? -map 0:s? -vf "scale=-2:{height}:flags=fast_bilinear" -c:v libx264 -preset ultrafast -crf 28 -threads 1 -c:a copy -c:s copy -max_muxing_queue_size 1024 -map_metadata -1 -metadata title="{final_display_name}" -metadata:s:v title="{final_display_name}" -metadata:s:a title="{final_display_name}" "{q_filename}" -y'
+
+            subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            size_str = "Unknown"
+            if os.path.exists(q_filename):
+                size_bytes = os.path.getsize(q_filename)
+                size_mb = size_bytes / (1024 * 1024)
+                size_str = f"{size_mb / 1024:.2f} GB" if size_mb >= 1024 else f"{size_mb:.2f} MB"
+
+            # Upload to Drive
+            drive_id = drive_manager.upload_movie(q_filename, folder_id, f"{final_display_name}{file_ext}")
+            
+            if drive_id:
+                generated_links_array.append({
+                    "quality": q_name,
+                    "driveId": drive_id,
+                    "driveLink": f"https://drive.google.com/file/d/{drive_id}/view",
+                    "fileSize": size_str,
+                    "movieName": final_display_name
+                })
+
+        except Exception as e:
+            print(f"[Error] Processing failed for {q_name}: {e}")
+        finally:
+            if os.path.exists(q_filename): os.remove(q_filename)
+
+    # STEP 6: Delete Master File
+    if os.path.exists(master_filename): os.remove(master_filename)
+
     print("[Cleanup] System clean.")
+    print(f"__FINAL_RESULT_ARRAY__={json.dumps(generated_links_array)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Headless Movie Processor")
-    parser.add_argument("--url", required=True, help="Video URL")
-    parser.add_argument("--folder", required=True, help="Target Folder ID")
-    parser.add_argument("--refresh_token", required=True, help="User's Refresh Token")
-    parser.add_argument("--client_id", required=True, help="Google Client ID")
-    parser.add_argument("--client_secret", required=True, help="Google Client Secret")
-    parser.add_argument("--custom_name", required=False, default="", help="Custom Movie Name")
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--folder", required=True)
+    parser.add_argument("--refresh_token", required=True)
+    parser.add_argument("--client_id", required=True)
+    parser.add_argument("--client_secret", required=True)
+    parser.add_argument("--custom_name", required=False, default="")
     
     args = parser.parse_args()
-    
     process_and_upload_movie(args.url, args.folder, args.client_id, args.client_secret, args.refresh_token, args.custom_name)

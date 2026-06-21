@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import User from "@/lib/User";
@@ -10,6 +9,7 @@ import fs from "fs";
 import crypto from "crypto";
 
 const execPromise = util.promisify(exec);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); // 🚀 API ব্লক এড়ানোর জন্য Sleep ফাংশন
 
 const taskQueue = [];
 let isProcessing = false;
@@ -55,130 +55,117 @@ export async function POST(req) {
     taskQueue.push(async () => {
       console.log(`[Queue] Starting job ${jobId} for: ${email}`);
       try {
-          const { stdout, stderr } = await execPromise(command);
-          const match = stdout.match(/__FINAL_DRIVE_LINK__=(.+)/);
+          const { stdout, stderr } = await execPromise(command, { maxBuffer: 1024 * 1024 * 50 });
+          
+          const match = stdout.match(/__FINAL_RESULT_ARRAY__=(.+)/);
           
           if (match && match[1]) {
-              const finalDriveLink = match[1].trim();
-              const idMatch = finalDriveLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
-              const driveFileId = idMatch ? idMatch[1] : null;
-
-              if (!driveFileId) throw new Error("No Drive ID");
-
-              const nameMatch = stdout.match(/\[Upload\] Uploading '([^']+)' to Google Drive/);
-              const finalMovieName = nameMatch ? nameMatch[1] : `Movie_${driveFileId}`;
-
-              // 🚀 ফাইল সাইজ ম্যাচ করে বের করা
-              const sizeMatch = stdout.match(/__FILE_SIZE__=(.+)/);
-              const finalFileSize = sizeMatch ? sizeMatch[1].trim() : "Unknown";
+              const processedQualities = JSON.parse(match[1]); 
               
-              let dlDokanLink = "Failed", gcloudLink = "Failed", driveCloudLink = "Failed", gofileLink = `https://d.instantdl.cfd/dokan/gofile.php?drive_id=${driveFileId}`;
-              let generatedAbyssId = null; // 🟢 Abyss ID এর ভ্যারিয়েবল
+              if (processedQualities.length === 0) throw new Error("No qualities generated");
 
-              // 🟢 1. Official Abyss.to API Call (Login & Remote Upload)
-              try {
-                if (process.env.ABYSS_EMAIL && process.env.ABYSS_PASSWORD) {
-                  console.log(`[Queue Abyss] 1. Logging in to Abyss to get Token...`);
-                  
-                  // স্টেপ ১: লগইন করে টোকেন নেওয়া
-                  const authRes = await fetch('https://api.abyss.to/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      email: process.env.ABYSS_EMAIL,
-                      password: process.env.ABYSS_PASSWORD
-                    })
-                  });
+              const finalQualitiesArray = [];
+              let mainMovieName = processedQualities[0].movieName;
+              
+              // 🚀 ১. শুধুমাত্র প্লেয়ার (Abyss) এর জন্য মাস্টার আইডি নেবো
+              const masterDriveId = processedQualities[0].driveId;
+              let masterAbyssId = null;
 
-                  const authData = await authRes.json();
+              console.log(`[API Queue] Fetching Abyss Player ID ONLY ONCE for Master ID: ${masterDriveId}`);
 
-                  if (authData && authData.token) {
-                    const abyssToken = authData.token;
-                    console.log(`[Queue Abyss] ✅ Token received! Requesting Remote Upload...`);
-
-                    // স্টেপ ২: টোকেন ব্যবহার করে রিমোট আপলোড করা
-                    const abyssRes = await fetch(`https://api.abyss.to/v1/remote/drive/${driveFileId}`, {
-                      method: 'POST',
-                      headers: {
-                        'Authorization': `Bearer ${abyssToken}`,
-                        'Content-Type': 'application/json'
+              // 🟢 Abyss Upload (লুপের বাইরে একবারই কল হবে)
+              if (process.env.ABYSS_EMAIL && process.env.ABYSS_PASSWORD) {
+                  try {
+                      const authRes = await fetch('https://api.abyss.to/auth/login', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ email: process.env.ABYSS_EMAIL, password: process.env.ABYSS_PASSWORD })
+                      });
+                      const authData = await authRes.json();
+                      if (authData?.token) {
+                          const abyssRes = await fetch(`https://api.abyss.to/v1/remote/drive/${masterDriveId}`, {
+                              method: 'POST', headers: { 'Authorization': `Bearer ${authData.token}`, 'Content-Type': 'application/json' }
+                          });
+                          if (abyssRes.ok) {
+                              const abyssDataFinal = JSON.parse(await abyssRes.text());
+                              if (abyssDataFinal?.id) masterAbyssId = abyssDataFinal.id;
+                          }
                       }
-                    });
-                    
-                    const rawResponse = await abyssRes.text();
-                    console.log(`[Queue Abyss] Status: ${abyssRes.status}`);
-                    
-                    if (abyssRes.ok && rawResponse.trim() !== "") {
-                        const abyssDataFinal = JSON.parse(rawResponse);
-                        
-                        if (abyssDataFinal && abyssDataFinal.id) {
-                          generatedAbyssId = abyssDataFinal.id;
-                          console.log(`[Queue Abyss] 🚀 Success! Abyss ID: ${generatedAbyssId}`);
-                        }
-                    } else {
-                        console.log(`[Queue Abyss Error] Upload Rejected:`, rawResponse);
-                    }
-                  } else {
-                    console.log(`[Queue Abyss Error] Login Failed. Check Email/Password.`, authData);
-                  }
-                } else {
-                  console.log("[Queue Abyss] Email or Password missing in .env");
-                }
-              } catch (err) {
-                console.error("[Queue Abyss Error]", err.message);
+                  } catch(e) { console.error("Abyss Failed", e); }
               }
 
-              // 🟢 2. DL Dokan API Call
-              try {
-                if (process.env.DL_DOKAN_API_KEY) {
-                  const dlApiUrl = `https://dldokan.com/userapi/?api_key=${process.env.DL_DOKAN_API_KEY}&drive_id=${driveFileId}`;
-                  const dlData = await (await fetch(dlApiUrl)).json();
-                  if (dlData.success && dlData.data && dlData.data.download_url) {
-                    dlDokanLink = dlData.data.download_url;
+              // 🚀 ২. এবার লুপ চালিয়ে বাকি API গুলো কোয়ালিটি অনুযায়ী ফেচ করবো
+              for (let i = 0; i < processedQualities.length; i++) {
+                  const q = processedQualities[i];
+                  const currentDriveId = q.driveId;
+                  
+                  let dlDokanLink = "Failed", gcloudLink = "Failed", driveCloudLink = "Failed";
+                  const gofileLink = `https://d.instantdl.cfd/dokan/gofile.php?drive_id=${currentDriveId}`;
+
+                  console.log(`[API Queue] Fetching Download APIs for Quality: ${q.quality}`);
+
+                  // 🟢 DL Dokan API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  try {
+                      if (process.env.DL_DOKAN_API_KEY) {
+                          const dlApiUrl = `https://dldokan.com/userapi/?api_key=${process.env.DL_DOKAN_API_KEY}&drive_id=${currentDriveId}`;
+                          const dlRes = await fetch(dlApiUrl);
+                          const dlData = await dlRes.json();
+                          if (dlData?.success && dlData?.data?.download_url) dlDokanLink = dlData.data.download_url;
+                      }
+                  } catch (err) {}
+
+                  // 🟢 Drive Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  try {
+                      if (process.env.DRIVE_CLOUD_API_KEY) {
+                          const dcRes = await fetch(`http://new.drivecloud.cc/api/v1/${process.env.DRIVE_CLOUD_API_KEY}/${currentDriveId}`);
+                          const dcData = await dcRes.json();
+                          driveCloudLink = dcData?.data?.download_url || dcData?.url || dcData?.link || "Error";
+                      }
+                  } catch (err) {}
+
+                  // 🟢 G Cloud API (প্রতিটা কোয়ালিটির জন্য আলাদা)
+                  try {
+                      if (process.env.GCLOUD_API_KEY) {
+                          const gcApiUrl = `https://gcloud.sbs/api/v1/create/?drive_id=${currentDriveId}&api_key=${process.env.GCLOUD_API_KEY}`;
+                          const gcRes = await fetch(gcApiUrl);
+                          const gcData = await gcRes.json();
+                          if (gcData?.success && gcData?.data?.download_url) gcloudLink = gcData.data.download_url;
+                      }
+                  } catch (err) {}
+
+                  finalQualitiesArray.push({
+                      quality: q.quality,
+                      fileSize: q.fileSize,
+                      driveId: currentDriveId,
+                      driveLink: q.driveLink,
+                      abyssId: masterAbyssId,           // 🚀 শুধু প্লেয়ারটা মাস্টার থেকে কপি করা হলো
+                      gofileLink: gofileLink,
+                      dlDokanLink: dlDokanLink,         // 🟢 আলাদা কোয়ালিটির লিংক
+                      driveCloudLink: driveCloudLink,   // 🟢 আলাদা কোয়ালিটির লিংক
+                      gcloudLink: gcloudLink            // 🟢 আলাদা কোয়ালিটির লিংক
+                  });
+
+                  // ⚠️ API ব্লক এড়াতে প্রতি রিকোয়েস্টের পর ৩.৫ সেকেন্ডের ব্রেক
+                  if (i < processedQualities.length - 1) {
+                      await sleep(3500); 
                   }
-                }
-              } catch (err) {}
+              }
 
-              // 🟢 3. Old DriveCloud API Call
-              try {
-                if (process.env.DRIVE_CLOUD_API_KEY) {
-                  const dcData = await (await fetch(`http://new.drivecloud.cc/api/v1/${process.env.DRIVE_CLOUD_API_KEY}/${driveFileId}`)).json();
-                  driveCloudLink = dcData?.data?.download_url || dcData?.url || dcData?.link || "Error";
-                }
-              } catch (err) {}
-
-              // 🟢 4. New G Cloud API Call
-              try {
-                if (process.env.GCLOUD_API_KEY) {
-                  const gcApiUrl = `https://gcloud.sbs/api/v1/create/?drive_id=${driveFileId}&api_key=${process.env.GCLOUD_API_KEY}`;
-                  const gcRes = await fetch(gcApiUrl);
-                  const gcData = await gcRes.json();
-                  if (gcData.success && gcData.data && gcData.data.download_url) {
-                    gcloudLink = gcData.data.download_url;
-                  }
-                }
-              } catch (err) {}
-
-              // 🗄️ Database Update with all links and file size
+              // 🗄️ Database Update
               await GeneratedLink.findOneAndUpdate(
                 { jobId },
                 { 
                   status: "completed", 
-                  movieName: finalMovieName, 
-                  driveLink: finalDriveLink, 
-                  fileSize: finalFileSize, 
-                  abyssId: generatedAbyssId, // 🚀 Abyss ID ডাটাবেসে সেভ হচ্ছে
-                  gofileLink, 
-                  dlDokanLink, 
-                  gcloudLink,
-                  driveCloudLink 
+                  movieName: mainMovieName, 
+                  qualities: finalQualitiesArray,
+                  driveLink: finalQualitiesArray[0].driveLink, 
+                  fileSize: finalQualitiesArray[0].fileSize,   
                 }
               );
-              console.log(`[Queue Success] Job ${jobId} Completed!`);
+              console.log(`[Queue Success] Job ${jobId} Completed Properly with individual download links!`);
           } else {
-              throw new Error("Python script failed to return link.");
+              throw new Error("Python script failed to return qualities array.");
           }
-      }  catch (error) {
+      } catch (error) {
           console.error(`[Queue Error] Job ${jobId} Failed! Reason:`, error.message || error);
           await GeneratedLink.findOneAndUpdate({ jobId }, { status: "failed", movieName: "Process Failed!" });
       }
